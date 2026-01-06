@@ -1,4 +1,7 @@
 # MicroPython SSD1306 OLED driver, I2C and SPI interfaces
+# 注：此文件为标准 MicroPython SSD1306 驱动库。
+# 由于 OLED 硬件不内置中文字库，屏幕显示内容保持英文以防乱码。
+# 仅此类库文件保留原始英文注释结构，以便维护。
 
 from micropython import const
 import framebuf
