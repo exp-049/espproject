@@ -3,6 +3,7 @@ import machine
 from drivers.display import OLEDManager
 from drivers.sensors import SensorManager
 from drivers.actuators import ActuatorManager
+from drivers.tm1637 import TM1637
 from ir_decoder import NECRemote
 from fuzzy_pid import FuzzyPID
 
@@ -11,6 +12,7 @@ STATE_OFF = 0       # 关机 (待机)
 STATE_RUN = 1       # 运行 (自动控制)
 STATE_SET_TEMP = 2  # 设置目标温度
 STATE_SET_HUM = 3   # 设置目标湿度
+STATE_EMERGENCY = 4 # 紧急停止
 
 class DisplayUI:
     """
@@ -65,7 +67,16 @@ class SystemController:
         self.ui = DisplayUI()
         self.sensors = SensorManager()
         self.actuators = ActuatorManager()
+        
         self.actuators.init_actuators()
+        
+        # 数码管初始化 (CLK=18, DIO=19)
+        try:
+            self.tm = TM1637(clk=18, dio=19)
+            self.tm.brightness(2) # 设置亮度 (0-7)
+        except Exception as e:
+            print(f"Warning: TM1637 init failed: {e}")
+            self.tm = None
         
         # 2. 输入设备初始化 (红外)
         # 使用中断回调方式接收指令
@@ -92,6 +103,20 @@ class SystemController:
         
         print("系统初始化完成。等待开机指令 (红外: POWER)...")
         self.ui.oled.show_text("STANDBY", 30, 30)
+        
+        # 关机状态下数码管显示
+        if self.tm:
+            self.tm.show("OFF ")
+        # 5. 急停按钮初始化 (GPIO 32)
+        # 你的实际接线: Pin 32 -> Button -> GND (Pull Up)
+        self.emergency_btn = machine.Pin(32, machine.Pin.IN, machine.Pin.PULL_UP)
+        # 下降沿触发中断
+        self.emergency_btn.irq(trigger=machine.Pin.IRQ_FALLING, handler=self.on_emergency_btn)
+        self.emergency_triggered = False
+
+    def on_emergency_btn(self, pin):
+        """急停按钮中断回调"""
+        self.emergency_triggered = True
 
     def on_ir_command(self, key):
         """红外中断回调函数 (ISR 上下文) - 仅做数据缓存，不处理耗时逻辑"""
@@ -107,6 +132,17 @@ class SystemController:
         
         print(f"收到指令: {key}")
         
+        # 急停状态下特殊处理
+        if self.state == STATE_EMERGENCY:
+            if key == 'POWER':
+                self.state = STATE_OFF
+                print("解除急停 -> 待机 (OFF)")
+                self.ui.oled.show_text("STANDBY", 30, 30)
+                if self.tm: self.tm.show("OFF ")
+            else:
+                print("系统已急停，请按 POWER 复位")
+            return
+        
         if key == 'POWER':
             if self.state == STATE_OFF:
                 self.state = STATE_RUN
@@ -117,6 +153,7 @@ class SystemController:
                 self.actuators.init_actuators() # 重新初始化为 0 状态
                 print("系统已关闭 (OFF)")
                 self.ui.oled.show_text("STANDBY", 30, 30)
+                if self.tm: self.tm.show("OFF ")
         
         elif key == 'MUTE':
             # 功能: 静音蜂鸣器 / 确认
@@ -147,6 +184,8 @@ class SystemController:
                 elif self.state == STATE_SET_HUM: 
                     self.target_hum -= 5.0
 
+
+
     def run_scheduler(self):
         """主循环调度器 (非阻塞)"""
         while True:
@@ -154,8 +193,17 @@ class SystemController:
             
             # 0. 处理输入 (最高优先级)
             self.process_input()
-            
-            if self.state != STATE_OFF:
+            # 0.5. 检查急停标志 (最高优先级)
+            if self.emergency_triggered:
+                self.emergency_triggered = False # 清除标志，进入状态机处理
+                if self.state != STATE_EMERGENCY:
+                    self.state = STATE_EMERGENCY
+                    self.actuators.cleanup()
+                    print("!!! 紧急停止触发 !!!")
+                    self.ui.oled.show_text("! STOP !", 25, 25, size=2)
+                    if self.tm: self.tm.show("STOP")
+
+            if self.state != STATE_OFF and self.state != STATE_EMERGENCY:
                 # 1. 读取传感器 (每2000ms)
                 if time.ticks_diff(now, self.last_sensor_read) > 2000:
                     t, h = self.sensors.get_temp_humidity()
@@ -165,6 +213,45 @@ class SystemController:
                     
                     # 光控逻辑 (环境越暗，补光灯越亮 -> 这里根据用户需求：数值越大越亮)
                     self.current_ldr = self.sensors.get_light_level() # 0-4095
+                    
+                    # 数码管显示温度 (XX.XC)
+                    if self.tm:
+                        # 格式化温度
+                        temp_val = self.current_temp
+                        # 限制范围
+                        if temp_val > 99.9: temp_val = 99.9
+                        if temp_val < -9.9: temp_val = -9.9
+                        
+                        # 提取整数和小数部分
+                        abs_val = abs(temp_val)
+                        int_part = int(abs_val)
+                        dec_part = int(round((abs_val - int_part) * 10)) % 10
+                        
+                        # 计算各位数字
+                        tens = int_part // 10
+                        ones = int_part % 10
+                        
+                        segments = []
+                        
+                        # 第一位: 十位或负号或空
+                        if temp_val < 0:
+                            segments.append(self.tm.encode_char('-'))
+                        elif tens > 0:
+                            segments.append(self.tm.encode_char(str(tens)))
+                        else:
+                            segments.append(0) # Blank
+                            
+                        # 第二位: 个位 + 小数点
+                        segments.append(self.tm.encode_char(str(ones)) | 0x80)
+                        
+                        # 第三位: 小数位
+                        segments.append(self.tm.encode_char(str(dec_part)))
+                        
+                        # 第四位: 单位 'C'
+                        segments.append(self.tm.encode_char('C'))
+                        
+                        self.tm.write(segments)
+
                     # 映射逻辑 (简单比例)
                     white_pwm = int((self.current_ldr / 4095) * 65535)
                     if white_pwm > 65535: white_pwm = 65535

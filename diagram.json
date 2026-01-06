@@ -119,6 +119,25 @@
             "top": -12.3,
             "left": 345.7,
             "attrs": {}
+        },
+        {
+            "type": "wokwi-tm1637-7segment",
+            "id": "sevseg1",
+            "top": -153.98,
+            "left": -3.16,
+            "attrs": {
+                "color": "red"
+            }
+        },
+        {
+            "type": "wokwi-pushbutton",
+            "id": "btn1",
+            "top": 120,
+            "left": 290,
+            "attrs": {
+                "color": "red",
+                "label": "E-STOP"
+            }
         }
     ],
     "connections": [
@@ -357,6 +376,66 @@
                 "v-144.2",
                 "h247.31",
                 "v118.34"
+            ]
+        ],
+        [
+            "esp:D18",
+            "sevseg1:CLK",
+            "green",
+            [
+                "h9.38",
+                "v47.06",
+                "h96.2",
+                "v-249.29"
+            ]
+        ],
+        [
+            "esp:D19",
+            "sevseg1:DIO",
+            "green",
+            [
+                "h25.06",
+                "v-100.25",
+                "h74.17",
+                "v-82.88"
+            ]
+        ],
+        [
+            "esp:3V3",
+            "sevseg1:VCC",
+            "red",
+            [
+                "v-3.46",
+                "h201.79",
+                "v-249.2"
+            ]
+        ],
+        [
+            "esp:GND.1",
+            "sevseg1:GND",
+            "black",
+            [
+                "h196.28",
+                "v-239.35",
+                "h-3.81"
+            ]
+        ],
+        [
+            "btn1:1.l",
+            "esp:GND.1",
+            "black",
+            [
+                "h-20",
+                "v40"
+            ]
+        ],
+        [
+            "btn1:2.r",
+            "esp:D32",
+            "green",
+            [
+                "h10",
+                "v-20"
             ]
         ]
     ],
